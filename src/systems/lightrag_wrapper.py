@@ -3,9 +3,13 @@ LightRAG Wrapper
 
 Wrapper for the LightRAG framework to provide consistent interface
 for comparison with other RAG systems.
+
+Supports both real LLM calls (requires OPENAI_API_KEY) and mock mode
+for testing without API access.
 """
 
 import os
+import re
 import time
 import shutil
 from dataclasses import dataclass
@@ -28,30 +32,106 @@ class LightRAGConfig(RAGConfig):
     embedding_model: str = "text-embedding-3-small"
     working_dir: str = "./data/lightrag_cache"
     mode: str = "hybrid"  # naive, local, global, hybrid
+    use_mock: bool = False  # Use mock mode (no API calls)
+
+
+class MockLightRAG:
+    """
+    Mock LightRAG for testing without API calls.
+
+    Stores documents and returns simple pattern-based responses.
+    """
+
+    def __init__(self, working_dir: str):
+        self.working_dir = Path(working_dir)
+        self.documents: List[str] = []
+        self.deed_ids: List[str] = []
+
+    def insert(self, text: str):
+        """Store documents for later retrieval."""
+        self.documents.append(text)
+        # Extract deed IDs from text
+        deed_ids = re.findall(r'deed_\d+', text.lower())
+        self.deed_ids.extend(deed_ids)
+        self.deed_ids = list(set(self.deed_ids))
+
+    def query(self, question: str, param: Any = None) -> str:
+        """Generate mock response based on stored documents."""
+        question_lower = question.lower()
+
+        # Simple pattern matching for mock responses
+        matching_deeds = []
+
+        # Extract year from question
+        year_match = re.search(r'\b(19\d{2})\b', question)
+        decade_match = re.search(r'(19\d0)s', question_lower)
+
+        # Search documents for matching content
+        for doc in self.documents:
+            doc_lower = doc.lower()
+            deed_ids_in_doc = re.findall(r'deed_\d+', doc_lower)
+
+            # Check year match
+            if year_match:
+                year = year_match.group(1)
+                if year in doc:
+                    matching_deeds.extend(deed_ids_in_doc)
+
+            # Check decade match
+            elif decade_match:
+                decade = int(decade_match.group(1))
+                for year in range(decade, decade + 10):
+                    if str(year) in doc:
+                        matching_deeds.extend(deed_ids_in_doc)
+                        break
+
+            # Check for subdivision names
+            subdivision_patterns = ['pine valley', 'oak heights', 'maple grove', 'cedar hills']
+            for sub in subdivision_patterns:
+                if sub in question_lower and sub in doc_lower:
+                    matching_deeds.extend(deed_ids_in_doc)
+
+            # Check for conflict queries
+            if 'conflict' in question_lower or 'inconsisten' in question_lower:
+                if 'conflict' in doc_lower:
+                    matching_deeds.extend(deed_ids_in_doc)
+
+        matching_deeds = list(set(matching_deeds))
+
+        if matching_deeds:
+            return f"Based on the documents, the relevant deeds are: {', '.join(matching_deeds)}."
+        else:
+            return "I could not find relevant information to answer this question."
 
 
 class LightRAGWrapper(BaseRAGSystem):
     """
     Wrapper for LightRAG framework.
-    
+
     LightRAG provides:
     - Automatic entity/relationship extraction via LLM
     - Dual-level retrieval (low-level entities + high-level concepts)
     - Multiple retrieval modes (naive, local, global, hybrid)
-    
+
     This wrapper provides a consistent interface for benchmarking.
+    Supports mock mode for testing without API access.
     """
-    
+
     def __init__(self, config: Optional[LightRAGConfig] = None):
         self.config = config or LightRAGConfig()
         super().__init__(self.config)
-        
+
         self.rag = None
         self.working_dir = Path(self.config.working_dir)
         self._documents_indexed = 0
-    
+        self._indexed_data = None  # Store data for deed ID extraction
+
     def _init_lightrag(self):
         """Initialize the LightRAG instance."""
+        if self.config.use_mock:
+            self.rag = MockLightRAG(str(self.working_dir))
+            return self.rag
+
         try:
             from lightrag import LightRAG, QueryParam
             from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
@@ -59,23 +139,23 @@ class LightRAGWrapper(BaseRAGSystem):
             raise ImportError(
                 "LightRAG not installed. Install with: pip install lightrag-hku"
             )
-        
+
         # Create working directory
         self.working_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize LightRAG
         self.rag = LightRAG(
             working_dir=str(self.working_dir),
             llm_model_func=gpt_4o_mini_complete,
             embedding_func=openai_embed
         )
-        
+
         return self.rag
     
     def index(self, data: Any) -> None:
         """
         Index documents into LightRAG.
-        
+
         Args:
             data: Either:
                 - Dict with 'deeds' key (structured data - will convert to text)
@@ -84,11 +164,14 @@ class LightRAGWrapper(BaseRAGSystem):
                 - Single string (all documents concatenated)
         """
         start_time = time.time()
-        
+
         # Initialize LightRAG if needed
         if self.rag is None:
             self._init_lightrag()
-        
+
+        # Store data for later deed ID extraction
+        self._indexed_data = data
+
         # Handle different input formats
         if isinstance(data, str):
             # Single text blob
@@ -96,7 +179,13 @@ class LightRAGWrapper(BaseRAGSystem):
         elif isinstance(data, dict):
             if 'deeds' in data:
                 # Structured data - convert to text
-                from ..data.text_converter import TextConverter
+                try:
+                    from ..data.text_converter import TextConverter
+                except ImportError:
+                    import sys
+                    from pathlib import Path
+                    sys.path.insert(0, str(Path(__file__).parent.parent))
+                    from data.text_converter import TextConverter
                 converter = TextConverter(style="mixed")
                 text_dict = converter.convert_all(data)
                 texts = list(text_dict.values())
@@ -107,60 +196,74 @@ class LightRAGWrapper(BaseRAGSystem):
             texts = data
         else:
             raise ValueError(f"Unsupported data type: {type(data)}")
-        
+
         # Insert documents
         self._documents_indexed = len(texts)
-        
+
         # LightRAG insert accepts a single string, so we join with separators
         combined_text = "\n\n---\n\n".join(texts)
-        
-        print(f"[LightRAG] Inserting {len(texts)} documents...")
+
+        mode_str = "(mock)" if self.config.use_mock else ""
+        print(f"[LightRAG {mode_str}] Inserting {len(texts)} documents...")
         self.rag.insert(combined_text)
-        
+
         self.is_indexed = True
         self.index_time = datetime.now()
-        
+
         duration = time.time() - start_time
-        print(f"[LightRAG] Indexed {len(texts)} documents in {duration:.2f}s")
+        print(f"[LightRAG {mode_str}] Indexed {len(texts)} documents in {duration:.2f}s")
     
+    def _extract_deed_ids(self, answer: str) -> List[str]:
+        """Extract deed IDs from answer text for schema alignment."""
+        deed_ids = re.findall(r'deed_\d+', answer.lower())
+        return list(set(deed_ids))
+
     def query(self, question: str, mode: Optional[str] = None) -> RAGResponse:
         """
         Query LightRAG.
-        
+
         Args:
             question: Natural language question
             mode: Override retrieval mode (naive/local/global/hybrid)
-        
+
         Returns:
             RAGResponse with answer and metadata
         """
         if not self.is_indexed:
             raise RuntimeError("Must call index() before query()")
-        
+
         start_time = time.time()
         use_mode = mode or self.config.mode
-        
+
         try:
-            from lightrag import QueryParam
-            
-            # Set up query parameters
-            param = QueryParam(mode=use_mode)
-            
-            # Execute query
-            answer = self.rag.query(question, param=param)
-            
+            if self.config.use_mock:
+                # Mock mode - no need for QueryParam
+                answer = self.rag.query(question, param=None)
+            else:
+                from lightrag import QueryParam
+
+                # Set up query parameters
+                param = QueryParam(mode=use_mode)
+
+                # Execute query
+                answer = self.rag.query(question, param=param)
+
         except Exception as e:
             answer = f"Error during query: {str(e)}"
-        
+
         latency = (time.time() - start_time) * 1000
-        
+
+        # Extract deed IDs from answer for consistent output schema
+        retrieved_ids = self._extract_deed_ids(answer)
+
         return RAGResponse(
             answer=answer,
             retrieved_context=[],  # LightRAG doesn't expose retrieved chunks directly
-            retrieved_ids=[],      # Would need to parse from answer
+            retrieved_ids=retrieved_ids,
             metadata={
                 "mode": use_mode,
-                "framework": "lightrag"
+                "framework": "lightrag",
+                "mock": self.config.use_mock
             },
             latency_ms=latency
         )
@@ -261,15 +364,15 @@ class LightRAGWrapper(BaseRAGSystem):
 # Convenience classes for different modes
 class LightRAGNaive(LightRAGWrapper):
     """LightRAG with naive (vector-only) retrieval."""
-    def __init__(self):
-        config = LightRAGConfig(name="lightrag_naive", mode="naive")
+    def __init__(self, use_mock: bool = False):
+        config = LightRAGConfig(name="lightrag_naive", mode="naive", use_mock=use_mock)
         super().__init__(config)
 
 
 class LightRAGHybrid(LightRAGWrapper):
     """LightRAG with hybrid retrieval (recommended)."""
-    def __init__(self):
-        config = LightRAGConfig(name="lightrag_hybrid", mode="hybrid")
+    def __init__(self, use_mock: bool = False):
+        config = LightRAGConfig(name="lightrag_hybrid", mode="hybrid", use_mock=use_mock)
         super().__init__(config)
 
 
