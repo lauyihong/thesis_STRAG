@@ -45,9 +45,9 @@ def load_data(data_dir: Path):
 def create_systems(args, data):
     """Create RAG systems based on arguments."""
     systems = []
-    
+
     requested = args.systems.split(",") if args.systems else ["all"]
-    
+
     # Vector RAG
     if "all" in requested or "vector" in requested:
         config = VectorRAGConfig(
@@ -55,23 +55,22 @@ def create_systems(args, data):
             use_llm_answer=not args.mock
         )
         systems.append(VectorRAG(config))
-    
+
     # Custom Graph RAG V1
     if "all" in requested or "graph_v1" in requested:
         systems.append(CustomGraphRAGV1(use_llm_answer=not args.mock))
-    
+
     # Custom Graph RAG V2
     if "all" in requested or "graph_v2" in requested:
         systems.append(CustomGraphRAGV2(use_llm_answer=not args.mock))
-    
-    # LightRAG (requires API)
-    if not args.mock:
-        if "all" in requested or "lightrag_naive" in requested:
-            systems.append(LightRAGNaive())
-        
-        if "all" in requested or "lightrag_hybrid" in requested:
-            systems.append(LightRAGHybrid())
-    
+
+    # LightRAG (supports both real and mock modes)
+    if "all" in requested or "lightrag_naive" in requested:
+        systems.append(LightRAGNaive(use_mock=args.mock))
+
+    if "all" in requested or "lightrag_hybrid" in requested:
+        systems.append(LightRAGHybrid(use_mock=args.mock))
+
     return systems
 
 

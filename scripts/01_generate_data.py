@@ -5,7 +5,8 @@ Step 1: Generate Synthetic Data
 Generates synthetic deed documents and benchmark questions for RAG evaluation.
 
 Usage:
-    python scripts/01_generate_data.py --num_deeds 100
+    python scripts/01_generate_data.py --toy              # Quick toy dataset (10 deeds)
+    python scripts/01_generate_data.py --num_deeds 100    # Custom size
     python scripts/01_generate_data.py --config configs/experiment_config.yaml
 """
 
@@ -24,6 +25,7 @@ from data.text_converter import TextConverter
 
 def main():
     parser = argparse.ArgumentParser(description="Generate synthetic deed data")
+    parser.add_argument("--toy", action="store_true", help="Generate minimal toy dataset (10 deeds, 3 questions/level)")
     parser.add_argument("--num_deeds", type=int, default=100, help="Number of deeds to generate")
     parser.add_argument("--num_subdivisions", type=int, default=5, help="Number of subdivisions")
     parser.add_argument("--questions_per_level", type=int, default=10, help="Questions per difficulty level")
@@ -31,9 +33,16 @@ def main():
     parser.add_argument("--config", type=str, help="Path to YAML config file")
     parser.add_argument("--output_dir", type=str, default="./data", help="Output directory")
     parser.add_argument("--text_style", type=str, default="mixed", choices=["concise", "narrative", "mixed"])
-    
+
     args = parser.parse_args()
-    
+
+    # Apply toy mode settings
+    if args.toy:
+        args.num_deeds = 10
+        args.num_subdivisions = 2
+        args.questions_per_level = 3
+        print("==> TOY MODE: Using minimal dataset for quick testing")
+
     # Load config
     if args.config:
         config = load_config_from_yaml(args.config)

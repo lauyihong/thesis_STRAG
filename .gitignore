@@ -106,11 +106,12 @@ venv.bak/
 *.swo
 *~
 
-# Project specific
-data/
-!data/.gitkeep
-outputs/
-!outputs/.gitkeep
+# Project specific - generated data (root level only)
+/data/
+!/data/.gitkeep
+!/data/README.md
+/outputs/
+!/outputs/.gitkeep
 *.json
 !configs/*.yaml
 
