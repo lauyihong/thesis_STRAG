@@ -1,0 +1,95 @@
+# Experiment Configuration for thesis_STRAG
+
+# =============================================================================
+# Data Generation Settings
+# =============================================================================
+data:
+  # Scale parameters
+  num_deeds: 100                    # Number of synthetic deeds (100 for dev, 2000 for full)
+  num_subdivisions: 5               # Number of subdivisions
+  streets_per_subdivision: 15       # Streets per subdivision
+  
+  # Temporal distribution
+  temporal_range:
+    start: 1910
+    end: 1950
+  peak_years: [1924, 1926, 1942]    # Years with higher deed density
+  
+  # Spatial parameters
+  street_overlap_rate: 0.6          # 60% of deeds share streets
+  
+  # Conflict injection for L5 questions
+  date_conflict_rate: 0.07          # 5-8% date conflicts
+  review_conflict_rate: 0.10        # 10% review status conflicts
+  
+  # Random seed for reproducibility
+  seed: 42
+  
+  # Text conversion style: "concise", "narrative", or "mixed"
+  text_style: "mixed"
+  text_style_ratio: 0.6             # 60% concise, 40% narrative (for mixed)
+
+# =============================================================================
+# Benchmark Question Settings
+# =============================================================================
+benchmark:
+  questions_per_level: 10           # Number of questions per difficulty level
+  levels:
+    - name: "L1_single_hop"
+      description: "Single-hop entity lookup"
+    - name: "L2_temporal"
+      description: "Temporal constraint reasoning"
+    - name: "L3_spatial_multihop"
+      description: "Spatial multi-hop traversal"
+    - name: "L4_spatiotemporal"
+      description: "Joint spatio-temporal constraints"
+    - name: "L5_conflict"
+      description: "Conflict detection"
+
+# =============================================================================
+# RAG System Settings
+# =============================================================================
+systems:
+  # Vector RAG baseline
+  vector_rag:
+    embedding_model: "text-embedding-3-small"
+    embedding_dim: 1536
+    chunk_size: 500                 # Characters
+    chunk_overlap: 100
+    top_k: 5
+  
+  # LightRAG settings
+  lightrag:
+    llm_model: "gpt-4o-mini"
+    embedding_model: "text-embedding-3-small"
+    modes: ["naive", "hybrid"]      # Retrieval modes to test
+    working_dir: "./data/lightrag_cache"
+  
+  # Custom Graph RAG settings
+  custom_graph_rag:
+    version: "v2"                   # v1 or v2
+    use_llm_answer: true            # Use LLM to generate final answer
+
+# =============================================================================
+# Evaluation Settings
+# =============================================================================
+evaluation:
+  metrics:
+    - "exact_match"
+    - "f1_score"
+    - "temporal_accuracy"
+    - "spatial_accuracy"
+    - "hop_coverage"
+  
+  # LLM-as-judge settings (for semantic equivalence)
+  llm_judge:
+    enabled: true
+    model: "gpt-4o-mini"
+
+# =============================================================================
+# Experiment Settings
+# =============================================================================
+experiment:
+  num_runs: 3                       # Number of independent runs
+  output_dir: "./outputs"
+  save_intermediate: true           # Save per-question results
